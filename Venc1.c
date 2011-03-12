@@ -117,7 +117,7 @@ Int Venc1_process(Venc1_Handle hVe, Buffer_Handle hInBuf, Buffer_Handle hOutBuf)
     offset = (dim.y * dim.lineLength) + (dim.x * (bpp >> 3));
     assert(offset < Buffer_getSize(hInBuf));
 
-    inPtr  = Buffer_getUserPtr(hInBuf)  + offset;
+    inPtr  = Buffer_getUserPtr(hInBuf);//  + offset;
     outPtr = Buffer_getUserPtr(hOutBuf);
 
     /* Set up the codec buffer dimensions */
@@ -133,6 +133,16 @@ Int Venc1_process(Venc1_Handle hVe, Buffer_Handle hInBuf, Buffer_Handle hOutBuf)
         inBufDesc.bufDesc[0].buf        = inPtr;
         inBufDesc.bufDesc[1].buf        = inPtr + Buffer_getSize(hInBuf) * 2/3;
         inBufDesc.numBufs               = 2;
+    }
+    else if (BufferGfx_getColorSpace(hInBuf) == ColorSpace_YUV420P) {
+        inBufDesc.bufDesc[0].bufSize    = hVe->minInBufSize[0];
+        inBufDesc.bufDesc[1].bufSize    = hVe->minInBufSize[1];
+        inBufDesc.bufDesc[2].bufSize    = hVe->minInBufSize[2];
+
+        inBufDesc.bufDesc[0].buf        = inPtr;
+        inBufDesc.bufDesc[1].buf        = inPtr + Buffer_getSize(hInBuf) * 2/3;
+        inBufDesc.bufDesc[2].buf        = inPtr + Buffer_getSize(hInBuf) * 5/6;
+        inBufDesc.numBufs               = 3;
     }
     else if (BufferGfx_getColorSpace(hInBuf) == ColorSpace_UYVY) {
         inBufDesc.bufDesc[0].bufSize    = Buffer_getSize(hInBuf);

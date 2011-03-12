@@ -3,6 +3,7 @@
  * University(caiwenfeng@suda.edu.cn)
  * 
  */
+#include <stdio.h>
 
 #include "mediastreamer2/msfilter.h"
 #include "mediastreamer2/msticker.h"
@@ -29,6 +30,8 @@
 typedef struct _EncData {
     Engine_Handle   hEngine;
     Venc1_Handle    hVe1;
+    Buffer_Handle   hVidBuf;
+    Buffer_Handle   hEncBuf;
     MSVideoSize     vsize;
     int             bitrate;
     float           fps;
@@ -46,6 +49,8 @@ enc_init(MSFilter * f)
     EncData        *d = ms_new(EncData, 1);
     d->hEngine = NULL;
     d->hVe1 = NULL;
+    d->hVidBuf = NULL;
+    d->hEncBuf = NULL;
     d->bitrate = 384000;
     d->vsize = MS_VIDEO_SIZE_CIF;
     d->fps = 30;
@@ -72,6 +77,9 @@ enc_preprocess(MSFilter * f)
     VIDENC1_DynamicParams   defaultEncDynParams = Venc1_DynamicParams_DEFAULT;
     VIDENC1_Params         *encParams;
     VIDENC1_DynamicParams  *encDynParams;
+    BufferGfx_Attrs         gfxAttrs = BufferGfx_Attrs_DEFAULT;
+    Buffer_Attrs            bAttrs = Buffer_Attrs_DEFAULT;
+    Int32                   bufSize;
 
     bool_t                    cleanUpQ = FALSE;
 
@@ -133,43 +141,6 @@ enc_preprocess(MSFilter * f)
         ms_error("Failed to create video encoder: %s\n", "h264enc");
         cleanUpQ = TRUE;
     }
-    if (cleanUpQ) {
-        if (d->hVe1) {
-            Venc1_delete(d->hVe1);
-            d->hVe1 = NULL;
-        }
-
-        if (d->hEngine) {
-            Engine_close(d->hEngine);
-            d->hEngine = NULL;
-        }
-    }
-}
-
-static void
-dmai_buffer_to_msgb(Buffer_Handle hEncBuf, MSQueue * nalus)
-{
-    mblk_t         *m;
-    m = allocb(Buffer_getNumBytesUsed(hEncBuf), 0);
-
-    memcpy(m->b_wptr, Buffer_getUserPtr(hEncBuf), 
-           Buffer_getNumBytesUsed(hEncBuf));
-    m->b_wptr += Buffer_getNumBytesUsed(hEncBuf);
-    ms_queue_put(nalus, m);
-}
-
-static void
-enc_process(MSFilter * f)
-{
-    EncData                *d = (EncData *) f->data;
-    BufferGfx_Attrs         gfxAttrs = BufferGfx_Attrs_DEFAULT;
-    Buffer_Attrs            bAttrs = Buffer_Attrs_DEFAULT;
-    uint32_t                ts = f->ticker->time * 90LL;
-    mblk_t                 *im;
-    Buffer_Handle           hVidBuf, hEncBuf;
-    Int32                   bufSize;
-    Int                     ret = Dmai_EOK;
-    bool_t                  cleanUpQ = FALSE;
 
     gfxAttrs.colorSpace     = ColorSpace_YUV420P;
     gfxAttrs.dim.width      = d->vsize.width;
@@ -181,52 +152,108 @@ enc_process(MSFilter * f)
     bufSize = Venc1_getInBufSize(d->hVe1);
 
     /* Allocate video buffer */
-    hVidBuf = Buffer_create(bufSize, BufferGfx_getBufferAttrs(&gfxAttrs));
+    d->hVidBuf = Buffer_create(bufSize, BufferGfx_getBufferAttrs(&gfxAttrs));
 
     /* which output buffer size does the encoder require?	*/
     bufSize = Venc1_getOutBufSize(d->hVe1);
 	
     /* Allocate buffer for encoded data */
-    hEncBuf = Buffer_create(bufSize, &bAttrs);
+    d->hEncBuf = Buffer_create(bufSize, &bAttrs);
+
+    if (cleanUpQ) {
+        if (d->hVe1) {
+            Venc1_delete(d->hVe1);
+            d->hVe1 = NULL;
+        }
+
+        if (d->hEngine) {
+            Engine_close(d->hEngine);
+            d->hEngine = NULL;
+        }
+        if (d->hVidBuf) {
+            Buffer_delete(d->hVidBuf);
+            d->hVidBuf = NULL;
+        }
+
+	if(d->hEncBuf) {
+            Buffer_delete(d->hEncBuf);
+            d->hEncBuf = NULL;
+	}
+    }
+}
+
+static void
+dmai_buffer_to_msgb(Buffer_Handle hEncBuf, MSQueue * nalus)
+{
+    mblk_t         *m;
+    uint8_t *src, *end;
+    src = (uint8_t *)Buffer_getUserPtr(hEncBuf) + 4;
+    end = src + Buffer_getNumBytesUsed(hEncBuf) - 4;
+    while (src < (end - 3)) {
+        m = allocb(Buffer_getNumBytesUsed(hEncBuf) - 4, 0);
+
+        while (~(src[0]==0 && src[1]==0 && src[2]==1) && src < (end - 3)){
+            *(m->b_wptr)++=*src++;
+        }
+
+
+        if (src[0]==0 && src[1]==0 && src[2]==1) {
+            src += 3;
+            if ((*(m->b_rptr) & 0x1f) == 7) {
+                ms_message("A SPS is being sent.");
+            }else if ((*(m->b_rptr) & 0x1f) == 8) {
+                ms_message("A PPS is being sent.");
+            }
+            ms_queue_put(nalus, m);
+        } else {
+            *(m->b_wptr)++=*src++;
+            *(m->b_wptr)++=*src++;
+            *(m->b_wptr)++=*src++;
+            if ((*(m->b_rptr) & 0x1f) == 7) {
+                ms_message("A SPS is being sent.");
+            }else if ((*(m->b_rptr) & 0x1f) == 8) {
+                ms_message("A PPS is being sent.");
+            }
+            ms_queue_put(nalus, m);
+        }
+    }
+}
+
+static void
+enc_process(MSFilter * f)
+{
+    EncData                *d = (EncData *) f->data;
+    uint32_t                ts = f->ticker->time * 90LL;
+    mblk_t                 *im;
+    Int                     ret = Dmai_EOK;
 
     MSQueue         nalus;
     ms_queue_init(&nalus);
     while ((im = ms_queue_get(f->inputs[0])) != NULL) {
-        Buffer_setNumBytesUsed(hVidBuf, im->b_wptr - im->b_rptr);
-        memcpy(Buffer_getUserPtr(hVidBuf), im->b_rptr,
-               Buffer_getNumBytesUsed(hVidBuf));
+        Buffer_setNumBytesUsed(d->hVidBuf, im->b_wptr - im->b_rptr);
+        memcpy(Buffer_getUserPtr(d->hVidBuf), im->b_rptr,
+               Buffer_getNumBytesUsed(d->hVidBuf));
 
         /* Make sure the whole buffer is used for input */
-        BufferGfx_resetDimensions(hVidBuf);
+        BufferGfx_resetDimensions(d->hVidBuf);
         
-        Buffer_freeUseMask(hEncBuf, 0xffff);
+        Buffer_freeUseMask(d->hEncBuf, 0xffff);
         /* encode the video buffer	*/
-        ret = Venc1_process(d->hVe1, hVidBuf, hEncBuf);
+        ret = Venc1_process(d->hVe1, d->hVidBuf, d->hEncBuf);
         
         if( ret  < 0) {
             ms_error("Failed to encode video buffer\n");
-            cleanUpQ = TRUE;
         }
         
-        if (Buffer_getNumBytesUsed(hEncBuf) == 0) {
+        if (Buffer_getNumBytesUsed(d->hEncBuf) == 0) {
             ms_error("Encoder created 0 sized output frame\n");
-            cleanUpQ = TRUE;
         }
 
-        dmai_buffer_to_msgb(hEncBuf, &nalus);
+        dmai_buffer_to_msgb(d->hEncBuf, &nalus);
         rfc3984_pack(&d->packer, &nalus, f->outputs[0], ts);
         d->framenum++;
 
 	freemsg(im);
-    }
-    if (cleanUpQ) {
-        if (hVidBuf) {
-            Buffer_delete(hVidBuf);
-        }
-
-	if(hEncBuf) {
-		Buffer_delete(hEncBuf);
-	}
     }
 }
 
@@ -246,6 +273,15 @@ enc_postprocess(MSFilter * f)
     if (d->hEngine) {
 	Engine_close(d->hEngine);
         d->hEngine = NULL;
+    }
+    if (d->hVidBuf) {
+        Buffer_delete(d->hVidBuf);
+        d->hVidBuf = NULL;
+    }
+
+    if(d->hEncBuf) {
+        Buffer_delete(d->hEncBuf);
+        d->hEncBuf = NULL;
     }
 }
 
@@ -351,7 +387,7 @@ static MSFilterMethod enc_methods[] = {
 
 static MSFilterDesc h264_enc_desc = {
     .id = MS_FILTER_PLUGIN_ID,
-    .name = "SDX264Enc",
+    .name = "SDH264Enc",
     .text = "A H264 encoder based on Davinci DSP",
     .category = MS_FILTER_ENCODER,
     .enc_fmt = "H264",
@@ -368,6 +404,10 @@ static MSFilterDesc h264_enc_desc = {
 typedef struct _DecData {
     Engine_Handle           hEngine;
     Vdec2_Handle            hVd2;
+    BufTab_Handle           hBufTabImage;
+    Buffer_Handle           hVidBuf;
+    Buffer_Handle           hDecBuf;
+    Buffer_Handle           hDispBuf;
     mblk_t                 *sps,
                            *pps;
     Rfc3984Context          unpacker;
@@ -383,11 +423,18 @@ dec_init(MSFilter * f)
     VIDDEC2_DynamicParams   defaultDecDynParams = Vdec2_DynamicParams_DEFAULT;
     VIDDEC2_Params         *decParams;
     VIDDEC2_DynamicParams  *decDynParams;
+    BufferGfx_Attrs         gfxAttrs = BufferGfx_Attrs_DEFAULT;
+    Buffer_Attrs            bAttrs = Buffer_Attrs_DEFAULT;
+    Int32                   bufSize;
 
-    bool_t                    cleanUpQ = FALSE;
+    bool_t                  cleanUpQ = FALSE;
 
     d->hEngine = NULL;
     d->hVd2 = NULL;
+    d->hBufTabImage = NULL;
+    d->hVidBuf = NULL;
+    d->hDecBuf = NULL;
+    d->hDispBuf = NULL;
     d->sps = NULL;
     d->pps = NULL;
     rfc3984_init(&d->unpacker);
@@ -429,6 +476,49 @@ dec_init(MSFilter * f)
         cleanUpQ = TRUE;
     }
 
+    // The default transmitting size in linphone is set to MS_VIDEO_SIZE_CIF
+    gfxAttrs.colorSpace     = ColorSpace_YUV420P;
+    gfxAttrs.dim.width      = MS_VIDEO_SIZE_CIF_W;
+    gfxAttrs.dim.height     = MS_VIDEO_SIZE_CIF_H;
+    gfxAttrs.dim.lineLength = BufferGfx_calcLineLength(gfxAttrs.dim.width,
+                                                       gfxAttrs.colorSpace);
+
+    /* Which output buffer size does the codec require? */
+    bufSize = Vdec2_getOutBufSize(d->hVd2);
+
+    /* Allocate video buffers */
+    d->hBufTabImage = BufTab_create(DISPLAY_PIPE_SIZE, bufSize,
+                            BufferGfx_getBufferAttrs(&gfxAttrs));
+
+    if (d->hBufTabImage == NULL) {
+        ms_error("Failed to create BufTab for decoder\n");
+        cleanUpQ = TRUE;
+    }
+
+    /* The codec is going to use this BufTab for output buffers */
+    Vdec2_setBufTab(d->hVd2, d->hBufTabImage);
+
+    d->hVidBuf = BufTab_getFreeBuf(d->hBufTabImage);
+
+    /* which input buffer size does the decoder require?	*/
+    /* maybe it can be obtained by the encoder, because the required	*/
+    /* buffer size determined by the VDEC2 is 1.5M, but it is not */
+    /* needed by the real decoder */
+    if(d->inBsBufSize == 0) {
+        bufSize = Vdec2_getInBufSize(d->hVd2);
+    }
+    else {
+        bufSize = d->inBsBufSize;
+    }
+
+    /* Allocate buffer for encoded data */
+    d->hDecBuf = Buffer_create(bufSize, &bAttrs);
+    
+    if (d->hDecBuf == NULL) {
+        ms_error("Failed to allocate Buffer for decoder input\n");
+        cleanUpQ = TRUE;
+    }
+
     if (cleanUpQ) {
         /* Clean up the thread before exiting */
         if (d->hVd2) {
@@ -440,6 +530,20 @@ dec_init(MSFilter * f)
             Engine_close(d->hEngine);
             d->hEngine = NULL;
         }
+        if (d->hBufTabImage) {
+            BufTab_delete(d->hBufTabImage);
+            d->hBufTabImage = NULL;
+        }
+
+	if(d->hVidBuf) {
+            Buffer_delete(d->hVidBuf);
+            d->hVidBuf = NULL;
+	}
+	
+	if(d->hDecBuf) {
+            Buffer_delete(d->hDecBuf);
+            d->hDecBuf = NULL;
+	}
     }
 }
 
@@ -457,6 +561,20 @@ dec_uninit(MSFilter * f)
     if (d->hEngine) {
         Engine_close(d->hEngine);
         d->hEngine = NULL;
+    }
+    if (d->hBufTabImage) {
+        BufTab_delete(d->hBufTabImage);
+        d->hBufTabImage = NULL;
+    }
+
+    if(d->hVidBuf) {
+        Buffer_delete(d->hVidBuf);
+        d->hVidBuf = NULL;
+    }
+    
+    if(d->hDecBuf) {
+        Buffer_delete(d->hDecBuf);
+        d->hDecBuf = NULL;
     }
 
     if (d->sps)
@@ -504,69 +622,19 @@ dec_process(MSFilter * f)
     DecData                *d = (DecData *) f->data;
     mblk_t                 *im;
     MSQueue                 nalus;
-    BufTab_Handle           hBufTabImage = NULL;
-    BufferGfx_Attrs         gfxAttrs = BufferGfx_Attrs_DEFAULT;
-    Buffer_Attrs            bAttrs = Buffer_Attrs_DEFAULT;
-    Buffer_Handle           hVidBuf, hDecBuf, hDispBuf;
-    Int32                   bufSize;
     Int                     ret = Dmai_EOK;
     mblk_t                 *orig = NULL;
-
-    bool_t                    cleanUpQ = FALSE;
-
-    // The default transmitting size in linphone is set to MS_VIDEO_SIZE_CIF
-    gfxAttrs.colorSpace     = ColorSpace_YUV420P;
-    gfxAttrs.dim.width      = MS_VIDEO_SIZE_CIF_W;
-    gfxAttrs.dim.height     = MS_VIDEO_SIZE_CIF_H;
-    gfxAttrs.dim.lineLength = BufferGfx_calcLineLength(gfxAttrs.dim.width,
-                                                       gfxAttrs.colorSpace);
-
-    /* Which output buffer size does the codec require? */
-    bufSize = Vdec2_getOutBufSize(d->hVd2);
-
-    /* Allocate video buffers */
-    hBufTabImage = BufTab_create(DISPLAY_PIPE_SIZE, bufSize,
-                            BufferGfx_getBufferAttrs(&gfxAttrs));
-
-    if (hBufTabImage == NULL) {
-        ms_error("Failed to create BufTab for decoder\n");
-        cleanUpQ = TRUE;
-    }
-
-    /* The codec is going to use this BufTab for output buffers */
-    Vdec2_setBufTab(d->hVd2, hBufTabImage);
-
-    hVidBuf = BufTab_getFreeBuf(hBufTabImage);
-
-    /* which input buffer size does the decoder require?	*/
-    /* maybe it can be obtained by the encoder, because the required	*/
-    /* buffer size determined by the VDEC2 is 1.5M, but it is not */
-    /* needed by the real decoder */
-    if(d->inBsBufSize == 0) {
-        bufSize = Vdec2_getInBufSize(d->hVd2);
-    }
-    else {
-        bufSize = d->inBsBufSize;
-    }
-
-    /* Allocate buffer for encoded data */
-    hDecBuf = Buffer_create(bufSize, &bAttrs);
-    
-    if (hDecBuf == NULL) {
-        ms_error("Failed to allocate Buffer for decoder input\n");
-        cleanUpQ = TRUE;
-    }
 
     ms_queue_init(&nalus);
     while ((im = ms_queue_get(f->inputs[0])) != NULL) {
 	rfc3984_unpack(&d->unpacker, im, &nalus);
 	if (!ms_queue_empty(&nalus)) {
 
-	    nalusToFrame(hDecBuf, &nalus);
+	    nalusToFrame(d->hDecBuf, &nalus);
             /* Make sure the whole buffer is used for input and output */
-            BufferGfx_resetDimensions(hVidBuf);
+            BufferGfx_resetDimensions(d->hVidBuf);
 
-            ret = Vdec2_process(d->hVd2, hDecBuf, hVidBuf);
+            ret = Vdec2_process(d->hVd2, d->hDecBuf, d->hVidBuf);
 
             if (ret != Dmai_EOK) {
                 ms_error("Failed to decode video buffer\n");
@@ -576,49 +644,35 @@ dec_process(MSFilter * f)
             /*
              * Send display frames to display thread 
              */
-            hDispBuf = Vdec2_getDisplayBuf(d->hVd2);
-            while (hDispBuf) {
-                get_as_yuvmsg(hDispBuf, orig);
+            d->hDispBuf = Vdec2_getDisplayBuf(d->hVd2);
+            while (d->hDispBuf) {
+                get_as_yuvmsg(d->hDispBuf, orig);
                 ms_queue_put(f->outputs[0], orig);
 
-                hDispBuf = Vdec2_getDisplayBuf(d->hVd2);
+                d->hDispBuf = Vdec2_getDisplayBuf(d->hVd2);
             }
 
 
             /*
              * Free up released frames 
              */
-            hVidBuf = Vdec2_getFreeBuf(d->hVd2);
-            while (hVidBuf) {
-                Buffer_freeUseMask(hVidBuf, 0xffff);
-                hVidBuf = Vdec2_getFreeBuf(d->hVd2);
+            d->hVidBuf = Vdec2_getFreeBuf(d->hVd2);
+            while (d->hVidBuf) {
+                Buffer_freeUseMask(d->hVidBuf, 0xffff);
+                d->hVidBuf = Vdec2_getFreeBuf(d->hVd2);
             }
 
             /*
              * Get a free buffer 
              */
-            hVidBuf = BufTab_getFreeBuf(hBufTabImage);
+            d->hVidBuf = BufTab_getFreeBuf(d->hBufTabImage);
 
-            if (hVidBuf == NULL) {
+            if (d->hVidBuf == NULL) {
                 ms_error("Failed to get free buffer from BufTab (in while)\n");
-                cleanUpQ = TRUE;
             }
 
         }
 	d->packet_num++;
-    }
-    if (cleanUpQ) {
-        if (hBufTabImage) {
-            BufTab_delete(hBufTabImage);
-        }
-
-	if(hVidBuf) {
-		Buffer_delete(hVidBuf);
-	}
-	
-	if(hDecBuf) {
-		Buffer_delete(hDecBuf);
-	}
     }
 }
 
