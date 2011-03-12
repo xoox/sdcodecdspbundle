@@ -189,16 +189,18 @@ dmai_buffer_to_msgb(Buffer_Handle hEncBuf, MSQueue * nalus)
     uint8_t *src, *end;
     src = (uint8_t *)Buffer_getUserPtr(hEncBuf) + 4;
     end = src + Buffer_getNumBytesUsed(hEncBuf) - 4;
-    while (src < (end - 3)) {
+    // tricks for the first encoded buffer from TI's demo H264 encoder
+    while (src < (end - 4)) {
         m = allocb(Buffer_getNumBytesUsed(hEncBuf) - 4, 0);
 
-        while (~(src[0]==0 && src[1]==0 && src[2]==1) && src < (end - 3)){
+        while (!(src[0]==0 && src[1]==0 && src[2]==0 && src[3]==1)
+               && src < (end - 4)){
             *(m->b_wptr)++=*src++;
         }
 
 
-        if (src[0]==0 && src[1]==0 && src[2]==1) {
-            src += 3;
+        if (src[0]==0 && src[1]==0 && src[2]==0 && src[3]==1) {
+            src += 4;
             if ((*(m->b_rptr) & 0x1f) == 7) {
                 ms_message("A SPS is being sent.");
             }else if ((*(m->b_rptr) & 0x1f) == 8) {
@@ -206,6 +208,7 @@ dmai_buffer_to_msgb(Buffer_Handle hEncBuf, MSQueue * nalus)
             }
             ms_queue_put(nalus, m);
         } else {
+            *(m->b_wptr)++=*src++;
             *(m->b_wptr)++=*src++;
             *(m->b_wptr)++=*src++;
             *(m->b_wptr)++=*src++;
