@@ -123,7 +123,7 @@ Int Vdec2_process(Vdec2_Handle hVd, Buffer_Handle hInBuf,
     assert(offset < Buffer_getSize(hDstBuf));
 
     inPtr  = Buffer_getUserPtr(hInBuf);
-    dstPtr = Buffer_getUserPtr(hDstBuf); // + offset;
+    dstPtr = Buffer_getUserPtr(hDstBuf) + offset;
 
     if (BufferGfx_getColorSpace(hDstBuf) == ColorSpace_YUV420PSEMI) {
         outBufPtrArray[0]       = dstPtr;

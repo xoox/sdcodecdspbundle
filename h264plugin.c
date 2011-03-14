@@ -554,8 +554,6 @@ dec_init(MSFilter * f)
      */
     Vdec2_setBufTab(d->hVd2, d->hBufTabImage);
 
-    d->hVidBuf = BufTab_getFreeBuf(d->hBufTabImage);
-
     /*
      * which input buffer size does the decoder require? 
      */
@@ -710,41 +708,43 @@ check_sps_pps_change(DecData * d, mblk_t * sps, mblk_t * pps)
     return ret1 || ret2;
 }
 
-static void
-get_as_yuvmsg(Buffer_Handle hVidBuf, mblk_t * orig)
+static mblk_t *
+get_as_yuvmsg(Buffer_Handle hVidBuf)
 {
-    orig = allocb(Buffer_getNumBytesUsed(hVidBuf), 0);
+    mblk_t * yuvmsg;
+    yuvmsg = allocb(Buffer_getNumBytesUsed(hVidBuf), 0);
 
-    memcpy(orig->b_wptr, Buffer_getUserPtr(hVidBuf),
+    memcpy(yuvmsg->b_wptr, Buffer_getUserPtr(hVidBuf),
 	   Buffer_getNumBytesUsed(hVidBuf));
-    orig->b_wptr += Buffer_getNumBytesUsed(hVidBuf);
+    yuvmsg->b_wptr += Buffer_getNumBytesUsed(hVidBuf);
+
+    return yuvmsg;
 }
 
 static void
-nalusToFrame(DecData *d, Buffer_Handle hDecBuf, MSQueue * naluq)
+nalusToFrame(DecData *d, Buffer_Handle hDecBuf, Int32 *poffset, mblk_t *im)
 {
-    mblk_t         *im;
     uint8_t        *dst,
-                   *src,
-                   *end;
+                   *src;
     int             nal_len;
     bool_t          start_picture = TRUE;
     uint8_t         nalu_type;
 
-    dst = (uint8_t *) Buffer_getUserPtr(hDecBuf);
-    end = dst + Buffer_getSize(hDecBuf);
-    while ((im = ms_queue_get(naluq)) != NULL) {
-	src = im->b_rptr;
-	nal_len = im->b_wptr - src;
+    dst = (uint8_t *) Buffer_getUserPtr(hDecBuf) + *poffset;
+    src = im->b_rptr;
+    nal_len = im->b_wptr - src;
 
-        nalu_type = (*src) & 0x1f;
+    nalu_type = (*src) & 0x1f;
+    // drop SEI messages
+    if (nalu_type != 6) {
         if (nalu_type == 7)
             check_sps_pps_change(d, im, NULL);
         if (nalu_type == 8)
             check_sps_pps_change(d, NULL, im);
         if (start_picture || nalu_type == 7/*SPS*/ || nalu_type == 8/*PPS*/ ) {
             *dst++ = 0;
-            start_picture = FALSE;
+            // assume no slices
+            // start_picture = FALSE;
         }
         /*prepend nal marker*/
         *dst++ = 0;
@@ -752,48 +752,53 @@ nalusToFrame(DecData *d, Buffer_Handle hDecBuf, MSQueue * naluq)
         *dst++ = 1;
         *dst++ = *src++;
 
-	while (src < (im->b_wptr - 3)) {
-	    if (src[0] == 0 && src[1] == 0 && src[2] < 3) {
+        while (src < (im->b_wptr - 3)) {
+            if (src[0] == 0 && src[1] == 0 && src[2] < 3) {
                 *dst++ = 0;
                 *dst++ = 0;
                 *dst++ = 3;
-		src += 2;
-	    }
-	    *dst++ = *src++;
-	}
+                src += 2;
+            }
+            *dst++ = *src++;
+        }
         *dst++ = *src++;
         *dst++ = *src++;
         *dst++ = *src++;
-	freemsg(im);
+        freemsg(im);
+        *poffset = dst - (uint8_t *) Buffer_getUserPtr(hDecBuf);
+        Buffer_setNumBytesUsed(hDecBuf, *poffset);
+    } else {
+        freemsg(im);
     }
-    Buffer_setNumBytesUsed(hDecBuf,
-			   (Int8 *) dst - Buffer_getUserPtr(hDecBuf));
 }
 
 static void
 dec_process(MSFilter * f)
 {
     DecData        *d = (DecData *) f->data;
-    mblk_t         *im;
+    mblk_t         *im, *msgbm;
     MSQueue         nalus;
     Int             ret = Dmai_EOK;
-    mblk_t         *orig = NULL;
+    Int32           offset;
+    uint8_t         nalu_type;
 
     ms_queue_init(&nalus);
-    while ((im = ms_queue_get(f->inputs[0])) != NULL) {
-        /*push the sps/pps given in sprop-parameter-sets if any*/
-        // if (d->packet_num==0 && d->sps && d->pps){
-        //     mblk_set_timestamp_info(d->sps,mblk_get_timestamp_info(im));
-        //     mblk_set_timestamp_info(d->pps,mblk_get_timestamp_info(im));
-        //     rfc3984_unpack(&d->unpacker,d->sps,&nalus);
-        //     rfc3984_unpack(&d->unpacker,d->pps,&nalus);
-        //     d->sps=NULL;
-        //     d->pps=NULL;
-        // }
-	rfc3984_unpack(&d->unpacker, im, &nalus);
-	if (!ms_queue_empty(&nalus)) {
 
-	    nalusToFrame(d, d->hDecBuf, &nalus);
+    while ((im = ms_queue_get(f->inputs[0])) != NULL) {
+	rfc3984_unpack(&d->unpacker, im, &nalus);
+        while ((msgbm = ms_queue_get(&nalus)) != NULL) {
+            offset = 0;
+            // header info should be packed with one frame
+            nalu_type = msgbm->b_rptr[0] & 0x1f;
+            while (msgbm != NULL && nalu_type > 5 && nalu_type < 9) {
+                nalusToFrame(d, d->hDecBuf, &offset, msgbm);
+                msgbm = ms_queue_get(&nalus);
+                nalu_type = msgbm->b_rptr[0] & 0x1f;
+            }
+	    nalusToFrame(d, d->hDecBuf, &offset, msgbm);
+
+            d->hVidBuf = BufTab_getFreeBuf(d->hBufTabImage);
+
 	    /*
 	     * Make sure the whole buffer is used for input and output 
 	     */
@@ -811,12 +816,12 @@ dec_process(MSFilter * f)
 	     */
 	    d->hDispBuf = Vdec2_getDisplayBuf(d->hVd2);
 	    while (d->hDispBuf) {
-		get_as_yuvmsg(d->hDispBuf, orig);
-		ms_queue_put(f->outputs[0], orig);
+		ms_queue_put(f->outputs[0], get_as_yuvmsg(d->hDispBuf));
 
+		Buffer_freeUseMask(d->hDispBuf, 0xffff);
+                BufferGfx_resetDimensions(d->hDispBuf);
 		d->hDispBuf = Vdec2_getDisplayBuf(d->hVd2);
 	    }
-
 
 	    /*
 	     * Free up released frames 
@@ -824,20 +829,11 @@ dec_process(MSFilter * f)
 	    d->hVidBuf = Vdec2_getFreeBuf(d->hVd2);
 	    while (d->hVidBuf) {
 		Buffer_freeUseMask(d->hVidBuf, 0xffff);
+                BufferGfx_resetDimensions(d->hVidBuf);
 		d->hVidBuf = Vdec2_getFreeBuf(d->hVd2);
 	    }
+        }
 
-	    /*
-	     * Get a free buffer 
-	     */
-	    d->hVidBuf = BufTab_getFreeBuf(d->hBufTabImage);
-
-	    if (d->hVidBuf == NULL) {
-		ms_error
-		    ("Failed to get free buffer from BufTab (in while)\n");
-	    }
-
-	}
 	d->packet_num++;
     }
 }

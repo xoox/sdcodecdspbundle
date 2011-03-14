@@ -117,7 +117,7 @@ Int Venc1_process(Venc1_Handle hVe, Buffer_Handle hInBuf, Buffer_Handle hOutBuf)
     offset = (dim.y * dim.lineLength) + (dim.x * (bpp >> 3));
     assert(offset < Buffer_getSize(hInBuf));
 
-    inPtr  = Buffer_getUserPtr(hInBuf);//  + offset;
+    inPtr  = Buffer_getUserPtr(hInBuf) + offset;
     outPtr = Buffer_getUserPtr(hOutBuf);
 
     /* Set up the codec buffer dimensions */
