@@ -23,7 +23,7 @@
 #include <ti/sdo/dmai/ce/Venc1.h>
 #include <ti/sdo/dmai/ce/Vdec2.h>
 
-#define VERSION                 "0.1"
+#define VERSION                 "0.2"
 #define ENGINE_NAME             "encodedecode"
 #define DISPLAY_PIPE_SIZE       5
 
@@ -884,10 +884,15 @@ static MSFilterDesc h264_dec_desc = {
     .methods = h264_dec_methods
 };
 
+extern MSFilterDesc amr_dec_desc;
+extern MSFilterDesc amr_enc_desc;
+
 void
-libsdh264_init(void)
+libsdcodecdspbundle_init(void)
 {
     ms_filter_register(&h264_enc_desc);
     ms_filter_register(&h264_dec_desc);
-    ms_message("SD-H264-" VERSION " plugin registered.");
+    ms_filter_register(&amr_dec_desc);
+    ms_filter_register(&amr_enc_desc);
+    ms_message("SD-CODEC-DSP-BUNDLE-" VERSION " plugin registered.");
 }
