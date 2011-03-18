@@ -886,6 +886,8 @@ static MSFilterDesc h264_dec_desc = {
 
 extern MSFilterDesc amr_dec_desc;
 extern MSFilterDesc amr_enc_desc;
+extern MSFilterDesc g729_dec_desc;
+extern MSFilterDesc g729_enc_desc;
 
 void
 libsdcodecdspbundle_init(void)
@@ -894,5 +896,7 @@ libsdcodecdspbundle_init(void)
     ms_filter_register(&h264_dec_desc);
     ms_filter_register(&amr_dec_desc);
     ms_filter_register(&amr_enc_desc);
+    ms_filter_register(&g729_dec_desc);
+    ms_filter_register(&g729_enc_desc);
     ms_message("SD-CODEC-DSP-BUNDLE-" VERSION " plugin registered.");
 }
