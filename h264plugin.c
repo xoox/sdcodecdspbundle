@@ -52,7 +52,8 @@ enc_init(MSFilter * f)
     d->hVidBuf = NULL;
     d->hEncBuf = NULL;
     d->bitrate = 384000;
-    d->vsize = MS_VIDEO_SIZE_CIF;
+    // d->vsize = MS_VIDEO_SIZE_CIF;
+    d->vsize = (MSVideoSize) {480, 320};
     d->fps = 30;
     d->keyframe_int = 10;	/* 10 seconds */
     d->mode = 0;
@@ -329,29 +330,37 @@ enc_set_br(MSFilter * f, void *arg)
     d->bitrate = *(int *) arg;
 
     if (d->bitrate >= 1024000) {
-	d->vsize = MS_VIDEO_SIZE_VGA;
-	d->fps = 25;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
+	d->fps = 30;
     } else if (d->bitrate >= 512000) {
-	d->vsize = MS_VIDEO_SIZE_VGA;
-	d->fps = 15;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
+	d->fps = 30;
     } else if (d->bitrate >= 384000) {
-	d->vsize = MS_VIDEO_SIZE_CIF;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
 	d->fps = 30;
     } else if (d->bitrate >= 256000) {
-	d->vsize = MS_VIDEO_SIZE_CIF;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
 	d->fps = 15;
     } else if (d->bitrate >= 128000) {
-	d->vsize = MS_VIDEO_SIZE_CIF;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
 	d->fps = 15;
     } else if (d->bitrate >= 64000) {
-	d->vsize = MS_VIDEO_SIZE_CIF;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
 	d->fps = 10;
     } else if (d->bitrate >= 32000) {
-	d->vsize = MS_VIDEO_SIZE_QCIF;
-	d->fps = 10;
-    } else {
-	d->vsize = MS_VIDEO_SIZE_QCIF;
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
 	d->fps = 5;
+    } else {
+	// d->vsize = MS_VIDEO_SIZE_CIF;
+	d->vsize = (MSVideoSize) {480, 320};
+	d->fps = 2;
     }
     ms_message("bitrate set to %i", d->bitrate);
     return 0;
@@ -511,8 +520,10 @@ dec_init(MSFilter * f)
 	cleanUpQ = TRUE;
     }
 
-    decParams->maxWidth = MS_VIDEO_SIZE_CIF_W;
-    decParams->maxHeight = MS_VIDEO_SIZE_CIF_H;
+    // decParams->maxWidth = MS_VIDEO_SIZE_CIF_W;
+    // decParams->maxHeight = MS_VIDEO_SIZE_CIF_H;
+    decParams->maxWidth = 480;
+    decParams->maxHeight = 320;
     decParams->forceChromaFormat = XDM_YUV_420P;
 
     /*
@@ -527,8 +538,10 @@ dec_init(MSFilter * f)
     // The default transmitting size in linphone is set to
     // MS_VIDEO_SIZE_CIF
     gfxAttrs.colorSpace = ColorSpace_YUV420P;
-    gfxAttrs.dim.width = MS_VIDEO_SIZE_CIF_W;
-    gfxAttrs.dim.height = MS_VIDEO_SIZE_CIF_H;
+    // gfxAttrs.dim.width = MS_VIDEO_SIZE_CIF_W;
+    // gfxAttrs.dim.height = MS_VIDEO_SIZE_CIF_H;
+    gfxAttrs.dim.width = 480;
+    gfxAttrs.dim.height = 320;
     gfxAttrs.dim.lineLength = BufferGfx_calcLineLength(gfxAttrs.dim.width,
 						       gfxAttrs.
 						       colorSpace);
